@@ -25,6 +25,7 @@ MODEL_PATH = "best.pt"
 CLASSES_FILE = os.path.join("dataset", "classes.txt")
 PORT = 7280
 CONF_THRESHOLD = 0.2  # Detection confidence threshold (0.0 - 1.0)
+FPS_CAP = 60  # Maximum detection FPS (frames per second)
 
 # --------------- Load model & classes ---------------
 print(f"Loading YOLO model ({MODEL_PATH})...")
@@ -147,6 +148,7 @@ let detecting = false;
 let detections = [];
 let detImgW = 640, detImgH = 480;
 let confThreshold = __CONF__;
+let fpsDelay = __FPS_DELAY__;
 let detectInterval = null;
 
 const videoEl  = document.createElement('video');
@@ -288,7 +290,7 @@ function detectLoop() {
     });
   }
 
-  detectInterval = setTimeout(detectLoop, 0);
+  detectInterval = setTimeout(detectLoop, fpsDelay);
 }
 
 // -------- Render loop (60fps) --------
@@ -351,6 +353,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in ("/", "/index.html"):
             html = HTML_PAGE.replace("__CONF__", str(CONF_THRESHOLD))
+            html = html.replace("__FPS_DELAY__", str(int(1000 / FPS_CAP)))
             self._send(200, "text/html", html.encode())
         elif self.path == "/classes":
             self._send(200, "application/json", json.dumps(class_names).encode())
