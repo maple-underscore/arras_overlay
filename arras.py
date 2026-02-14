@@ -13,6 +13,9 @@ import http.server
 import json
 import base64
 import os
+import sys
+import webbrowser
+import threading
 import numpy as np
 import cv2
 from ultralytics import YOLO
@@ -419,18 +422,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
         # Only log errors
-        if args and str(args[0]).startswith("4") or str(args[0]).startswith("5"):
+        if args and (str(args[0]).startswith("4") or str(args[0]).startswith("5")):
             super().log_message(fmt, *args)
 
 
 if __name__ == "__main__":
     server = http.server.HTTPServer(("0.0.0.0", PORT), Handler)
+    url = f"http://localhost:{PORT}"
     print(f"\n  Arras.io YOLO Overlay")
-    print(f"  http://localhost:{PORT}")
+    print(f"  {url}")
     print(f"  Model: {MODEL_PATH}  |  Classes: {class_names}")
     print(f"  Press Ctrl+C to stop\n")
+
+    # Auto-open browser after a short delay (works on Windows, macOS, Linux)
+    threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nServer stopped.")
         server.server_close()
+        sys.exit(0)
