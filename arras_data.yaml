@@ -1,0 +1,5 @@
+# arras_data.yaml
+train: ./dataset/images  # path to your training images
+val: ./dataset/images    # if you have a separate validation set, put it here
+nc: 8                    # number of classes (update to match your classes.txt)
+names: ["bullet", "egg", "hexagon", "pentagon", "player", "square", "triangle", "wall"]  # list of class names exactly as in classes.txt

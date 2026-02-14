@@ -129,7 +129,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
 
 <script>
 // -------- Constants --------
-// bullet, egg, hexagon, pentagon, player, square, triangle
+// bullet, egg, hexagon, pentagon, player, square, triangle, wall
 const CLASS_COLORS = [
   'rgb(255,38,0)',   // bullet
   'rgb(255,255,255)',// egg
@@ -137,7 +137,8 @@ const CLASS_COLORS = [
   'rgb(135,78,254)', // pentagon
   'rgb(0,249,1)',    // player
   'rgb(254,199,0)',  // square
-  'rgb(255,147,0)'   // triangle
+  'rgb(255,147,0)',  // triangle
+  'rgb(122,122,122)' // wall
 ];
 
 // -------- State --------
@@ -199,14 +200,40 @@ async function toggleCapture() {
 
 async function startCapture() {
   try {
+    // Check if getDisplayMedia is supported
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+      alert('Screen capture not supported in this browser.\n\nPlease use Chrome, Edge, or Firefox.');
+      document.getElementById('status').textContent = 'Not Supported';
+      return;
+    }
+
     stream = await navigator.mediaDevices.getDisplayMedia({
-      video: { frameRate: { ideal: 30 } },
+      video: { 
+        frameRate: { ideal: 30 },
+        displaySurface: 'browser'
+      },
+      audio: false,
       preferCurrentTab: true,
-      selfBrowserSurface: 'include'
+      selfBrowserSurface: 'include',
+      surfaceSwitching: 'include',
+      systemAudio: 'exclude'
     });
   } catch (e) {
-    console.error('Screen capture denied:', e);
-    document.getElementById('status').textContent = 'Denied';
+    console.error('Screen capture error:', e);
+    let errorMsg = 'Screen capture failed: ' + e.name;
+    
+    if (e.name === 'NotAllowedError') {
+      errorMsg = 'Permission denied. Click Start YOLO and select a tab/window to share.';
+    } else if (e.name === 'NotSupportedError') {
+      errorMsg = 'Screen capture not supported. Try Chrome or use HTTPS.';
+    } else if (e.name === 'NotFoundError') {
+      errorMsg = 'No screen/window available to capture.';
+    } else if (e.name === 'AbortError') {
+      errorMsg = 'Screen capture cancelled.';
+    }
+    
+    document.getElementById('status').textContent = 'Error';
+    alert(errorMsg + '\n\nError: ' + e.name + '\n' + (e.message || ''));
     return;
   }
 
@@ -357,6 +384,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(200, "text/html", html.encode())
         elif self.path == "/classes":
             self._send(200, "application/json", json.dumps(class_names).encode())
+        elif self.path in ("/favicon.ico", "/robots.txt", "/sitemap.xml"):
+            # Silently ignore common browser requests
+            self.send_response(204)
+            self.end_headers()
         else:
             self.send_error(404)
 
@@ -424,21 +455,46 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def log_message(self, fmt, *args):
-        # Only log errors
-        if args and (str(args[0]).startswith("4") or str(args[0]).startswith("5")):
+        # Suppress SSL/TLS handshake errors and other noise
+        if args and len(args) > 1:
+            msg = str(args[1]) if len(args) > 1 else ""
+            # Skip SSL/TLS related bad request errors
+            if "Bad request version" in msg or "Bad request syntax" in msg:
+                return
+        # Only log actual errors (5xx)
+        if args and str(args[0]).startswith("5"):
             super().log_message(fmt, *args)
 
 
 if __name__ == "__main__":
-    server = http.server.HTTPServer(("0.0.0.0", PORT), Handler)
+    server = http.server.HTTPServer(("localhost", PORT), Handler)
     url = f"http://localhost:{PORT}"
     print(f"\n  Arras.io YOLO Overlay")
     print(f"  {url}")
     print(f"  Model: {MODEL_PATH}  |  Classes: {class_names}")
     print(f"  Press Ctrl+C to stop\n")
 
-    # Auto-open browser after a short delay (works on Windows, macOS, Linux)
-    threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    # Auto-open in Chrome after a short delay (cross-platform)
+    def open_in_chrome():
+        try:
+            # Try common Chrome browser names (works on Windows, macOS, Linux)
+            chrome = webbrowser.get('chrome') if hasattr(webbrowser, 'get') else None
+            if chrome:
+                chrome.open(url)
+            else:
+                # Fallback: try by name
+                for name in ['google-chrome', 'chrome', 'chromium']:
+                    try:
+                        webbrowser.get(name).open(url)
+                        return
+                    except:
+                        continue
+                # If Chrome not found, use default browser
+                webbrowser.open(url)
+        except:
+            webbrowser.open(url)
+    
+    threading.Timer(1.0, open_in_chrome).start()
 
     try:
         server.serve_forever()
