@@ -1,0 +1,11 @@
+ollama>=0.4.0
+pyttsx3>=2.90
+SpeechRecognition>=3.10.0
+PyAudio>=0.2.14
+ultralytics>=8.0.0
+pyautogui>=0.9.54
+Pillow>=10.0.0
+paddleocr>=2.7.0
+paddlepaddle>=2.6.1
+transformers>=4.30.0
+torch>=2.0.0
