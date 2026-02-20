@@ -16,23 +16,99 @@ import os
 import sys
 import webbrowser
 import threading
+import time
 import numpy as np
 import cv2
 from ultralytics import YOLO
+import ollama
+from PIL import Image
+import io
 
 # --------------- Configuration ---------------
-MODEL_PATH = "best.pt"
+MODEL_PATH = "best_v2.pt"
 CLASSES_FILE = os.path.join("dataset", "classes.txt")
 PORT = 7280
 CONF_THRESHOLD = 0.2  # Detection confidence threshold (0.0 - 1.0)
 FPS_CAP = 60  # Maximum detection FPS (frames per second)
 
+# VL Model for stats extraction
+VL_ENABLED = False  # Set to True to enable VL stats extraction
+VL_MODEL = "hf.co/unsloth/InternVL3-1B-GGUF:Q4_K_M"
+VL_PROMPT = "What is the score and level shown in this game stats panel? Respond with just the numbers in format 'Score: X, Level: Y'"
+VL_POLL_INTERVAL = 2.0  # Poll stats every 2 seconds
+
+# Class colors (RGB format) - order matches arras_data.yaml
+COLOR_BASE_WALL = (58, 136, 254)       # base_wall
+COLOR_BIG_WALL = (242, 106, 235)       # big_wall
+COLOR_BOUNCY_WALL = (0, 0, 0)          # bouncy_wall
+COLOR_BULLET = (255, 38, 0)            # bullet - Red-orange
+COLOR_DAMAGE_WALL = (255, 38, 0)       # damage_wall
+COLOR_DOWN_ARROW = (122, 122, 122)     # down_arrow
+COLOR_DRONE = (255, 38, 0)             # drone
+COLOR_EGG = (255, 255, 255)            # egg - White
+COLOR_HEAL_WALL = (61, 198, 35)        # heal_wall
+COLOR_HEXAGON = (48, 242, 229)         # hexagon - Cyan
+COLOR_LEFT_ARROW = (122, 122, 122)     # left_arrow
+COLOR_PAINT_WALL = (148, 34, 146)      # paint_wall
+COLOR_PENTAGON = (135, 78, 254)        # pentagon - Purple
+COLOR_PLAYER = (0, 249, 1)             # player - Green
+COLOR_PORTAL_WALL = (4, 51, 255)       # portal_wall
+COLOR_RESPAWN_WALL = (150, 211, 95)    # respawn_wall
+COLOR_RIGHT_ARROW = (122, 122, 122)    # right_arrow
+COLOR_SELF = (255, 251, 0)             # self
+COLOR_SMALL_WALL = (0, 0, 0)           # small_wall
+COLOR_SQUARE = (254, 199, 0)           # square - Yellow
+COLOR_STICKY_WALL = (0, 0, 0)          # sticky_wall
+COLOR_TRAP = (255, 38, 0)              # trap
+COLOR_TRIANGLE = (255, 147, 0)         # triangle - Orange
+COLOR_UP_ARROW = (122, 122, 122)       # up_arrow
+COLOR_VISION_WALL = (254, 199, 0)      # vision_wall
+COLOR_WALL = (122, 122, 122)           # wall - Gray
+
+# Map class names to colors (order must match arras_data.yaml)
+CLASS_COLORS = [
+    COLOR_BASE_WALL,
+    COLOR_BIG_WALL,
+    COLOR_BOUNCY_WALL,
+    COLOR_BULLET,
+    COLOR_DAMAGE_WALL,
+    COLOR_DOWN_ARROW,
+    COLOR_DRONE,
+    COLOR_EGG,
+    COLOR_HEAL_WALL,
+    COLOR_HEXAGON,
+    COLOR_LEFT_ARROW,
+    COLOR_PAINT_WALL,
+    COLOR_PENTAGON,
+    COLOR_PLAYER,
+    COLOR_PORTAL_WALL,
+    COLOR_RESPAWN_WALL,
+    COLOR_RIGHT_ARROW,
+    COLOR_SELF,
+    COLOR_SMALL_WALL,
+    COLOR_SQUARE,
+    COLOR_STICKY_WALL,
+    COLOR_TRAP,
+    COLOR_TRIANGLE,
+    COLOR_UP_ARROW,
+    COLOR_VISION_WALL,
+    COLOR_WALL
+]
+
 # --------------- Load model & classes ---------------
 print(f"Loading YOLO model ({MODEL_PATH})...")
 model = YOLO(MODEL_PATH)
 
-# Default class names for arras.io objects
-DEFAULT_CLASSES = ["bullet", "egg", "hexagon", "pentagon", "player", "square", "triangle", "wall"]
+# Default class names for arras.io objects (from arras_data.yaml)
+DEFAULT_CLASSES = [
+    "base_wall", "big_wall", "bouncy_wall", "bullet",
+    "damage_wall", "down_arrow", "drone", "egg",
+    "heal_wall", "hexagon", "left_arrow", "paint_wall",
+    "pentagon", "player", "portal_wall", "respawn_wall",
+    "right_arrow", "self", "small_wall", "square",
+    "sticky_wall", "trap", "triangle", "up_arrow",
+    "vision_wall", "wall"
+]
 
 class_names = []
 if os.path.exists(CLASSES_FILE):
@@ -42,6 +118,59 @@ else:
     # Use default classes if file doesn't exist
     class_names = DEFAULT_CLASSES
 print(f"Classes: {class_names}")
+
+# --------------- VL Stats Analysis ---------------
+def analyze_stats(img_array):
+    """Analyze cropped stats region with VL model to extract score and level."""
+    try:
+        t0 = time.time()
+        # Crop to player stats area (40-60% x, 94-98.5% y)
+        height, width = img_array.shape[:2]
+        x1 = int(width * 0.40)
+        x2 = int(width * 0.60)
+        y1 = int(height * 0.94)
+        y2 = int(height * 0.985)
+        
+        cropped = img_array[y1:y2, x1:x2]
+        crop_h, crop_w = cropped.shape[:2]
+        
+        print(f"[VL] Analyzing stats region: {crop_w}x{crop_h} pixels (cropped from {width}x{height})")
+        
+        # Convert to PIL Image
+        img_rgb = cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB)
+        pil_img = Image.fromarray(img_rgb)
+        
+        # Save to bytes
+        img_bytes = io.BytesIO()
+        pil_img.save(img_bytes, format='PNG')
+        img_bytes.seek(0)
+        
+        print(f"[VL] Querying {VL_MODEL}...")
+        
+        # Query VL model
+        response = ollama.chat(
+            model=VL_MODEL,
+            messages=[{
+                "role": "user",
+                "content": VL_PROMPT,
+                "images": [img_bytes.getvalue()]
+            }],
+            options={
+                "num_gpu": 99,
+                "num_thread": 4,
+            }
+        )
+        
+        result = response["message"]["content"]
+        elapsed = time.time() - t0
+        
+        print(f"[VL] Response ({elapsed:.2f}s): {result}")
+        
+        return {"success": True, "text": result}
+    except Exception as e:
+        elapsed = time.time() - t0 if 't0' in locals() else 0
+        print(f"[VL] Error ({elapsed:.2f}s): {e}")
+        return {"success": False, "error": str(e)}
 
 # --------------- Serve HTML + detection API ---------------
 
@@ -127,6 +256,8 @@ HTML_PAGE = r"""<!DOCTYPE html>
   <div class="row"><label>Status</label><span class="val" id="status">Idle</span></div>
   <div class="row"><label>Detections</label><span class="val" id="det-count">0</span></div>
   <div class="row"><label>Latency</label><span class="val" id="latency">—</span></div>
+  <div class="row"><label>Score</label><span class="val" id="score">—</span></div>
+  <div class="row"><label>Level</label><span class="val" id="level">—</span></div>
   <div class="row"><label>Confidence</label><span class="val" id="conf-val">__CONF__</span></div>
   <input type="range" id="conf-slider" min="0.05" max="0.95" step="0.05" value="__CONF__">
   <button id="start-btn" onclick="toggleCapture()">Start YOLO</button>
@@ -135,17 +266,11 @@ HTML_PAGE = r"""<!DOCTYPE html>
 
 <script>
 // -------- Constants --------
-// bullet, egg, hexagon, pentagon, player, square, triangle, wall
-const CLASS_COLORS = [
-  'rgb(255,38,0)',   // bullet
-  'rgb(255,255,255)',// egg
-  'rgb(48,242,229)', // hexagon
-  'rgb(135,78,254)', // pentagon
-  'rgb(0,249,1)',    // player
-  'rgb(254,199,0)',  // square
-  'rgb(255,147,0)',  // triangle
-  'rgb(122,122,122)' // wall
-];
+// base_wall, big_wall, bouncy_wall, bullet, damage_wall, down_arrow, drone, egg,
+// heal_wall, hexagon, left_arrow, paint_wall, pentagon, player, portal_wall, respawn_wall,
+// right_arrow, self, small_wall, square, sticky_wall, trap, triangle, up_arrow,
+// vision_wall, wall
+const CLASS_COLORS = __CLASS_COLORS__;
 
 // -------- State --------
 let classNames = [];
@@ -157,6 +282,8 @@ let detImgW = 640, detImgH = 480;
 let confThreshold = __CONF__;
 let fpsDelay = __FPS_DELAY__;
 let detectInterval = null;
+let statsInterval = null;
+let vlEnabled = __VL_ENABLED__;
 
 const videoEl  = document.createElement('video');
 const capCanvas = document.createElement('canvas');
@@ -260,6 +387,10 @@ async function startCapture() {
   detectLoop();
   // Start render loop (60fps)
   renderLoop();
+  // Start stats polling (every 2s) if VL is enabled
+  if (vlEnabled) {
+    statsLoop();
+  }
 }
 
 function stopCapture() {
@@ -271,6 +402,7 @@ function stopCapture() {
   videoEl.srcObject = null;
   detections = [];
   clearTimeout(detectInterval);
+  clearTimeout(statsInterval);
 
   const btn = document.getElementById('start-btn');
   btn.textContent = 'Start YOLO';
@@ -278,6 +410,8 @@ function stopCapture() {
   document.getElementById('status').textContent = 'Idle';
   document.getElementById('det-count').textContent = '0';
   document.getElementById('latency').textContent = '—';
+  document.getElementById('score').textContent = '—';
+  document.getElementById('level').textContent = '—';
 
   // Clear overlay
   overlay.width = window.innerWidth;
@@ -376,6 +510,50 @@ function renderLoop() {
 
   requestAnimationFrame(renderLoop);
 }
+
+// -------- Stats polling (2s interval) --------
+function statsLoop() {
+  if (!isRunning || !vlEnabled) return;
+
+  if (videoEl.videoWidth > 0) {
+    // Capture current frame
+    const aspect = videoEl.videoHeight / videoEl.videoWidth;
+    const sendW = Math.min(640, videoEl.videoWidth);
+    const sendH = Math.round(sendW * aspect);
+    capCanvas.width = sendW;
+    capCanvas.height = sendH;
+    capCtx.drawImage(videoEl, 0, 0, sendW, sendH);
+
+    const dataUrl = capCanvas.toDataURL('image/jpeg', 0.7);
+
+    fetch('/analyze_stats', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: dataUrl })
+    })
+    .then(r => r.json())
+    .then(data => {
+      if (data.success) {
+        // Parse response like "Score: 12345, Level: 23"
+        const text = data.text;
+        const scoreMatch = text.match(/score[:\s]+(\d+)/i);
+        const levelMatch = text.match(/level[:\s]+(\d+)/i);
+        
+        if (scoreMatch) {
+          document.getElementById('score').textContent = scoreMatch[1];
+        }
+        if (levelMatch) {
+          document.getElementById('level').textContent = levelMatch[1];
+        }
+      }
+    })
+    .catch(err => {
+      console.error('Stats analysis error:', err);
+    });
+  }
+
+  statsInterval = setTimeout(statsLoop, 2000); // Poll every 2 seconds
+}
 </script>
 </body>
 </html>
@@ -385,11 +563,20 @@ function renderLoop() {
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in ("/", "/index.html"):
+            # Convert Python RGB tuples to JavaScript RGB strings
+            js_colors = [f"'rgb({r},{g},{b})'" for r, g, b in CLASS_COLORS]
+            colors_js = "[" + ", ".join(js_colors) + "]"
+            
             html = HTML_PAGE.replace("__CONF__", str(CONF_THRESHOLD))
             html = html.replace("__FPS_DELAY__", str(int(1000 / FPS_CAP)))
+            html = html.replace("__CLASS_COLORS__", colors_js)
+            html = html.replace("__VL_ENABLED__", "true" if VL_ENABLED else "false")
             self._send(200, "text/html", html.encode())
         elif self.path == "/classes":
             self._send(200, "application/json", json.dumps(class_names).encode())
+        elif self.path == "/vl_config":
+            config = {"model": VL_MODEL, "prompt": VL_PROMPT, "interval": VL_POLL_INTERVAL, "enabled": VL_ENABLED}
+            self._send(200, "application/json", json.dumps(config).encode())
         elif self.path in ("/favicon.ico", "/robots.txt", "/sitemap.xml"):
             # Silently ignore common browser requests
             self.send_response(204)
@@ -398,7 +585,31 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self):
-        if self.path == "/detect":
+        if self.path == "/analyze_stats":
+            try:
+                body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                data = json.loads(body)
+
+                # Decode image
+                img_b64 = data["image"]
+                if "," in img_b64:
+                    img_b64 = img_b64.split(",", 1)[1]
+                img_bytes = base64.b64decode(img_b64)
+                nparr = np.frombuffer(img_bytes, np.uint8)
+                img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+                if img is None:
+                    self._send(400, "application/json", b'{"success":false,"error":"bad image"}')
+                    return
+
+                # Analyze stats with VL model
+                result = analyze_stats(img)
+                self._send(200, "application/json", json.dumps(result).encode())
+
+            except Exception as e:
+                self._send(500, "application/json",
+                           json.dumps({"success": False, "error": str(e)}).encode())
+        elif self.path == "/detect":
             try:
                 body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
                 data = json.loads(body)
