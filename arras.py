@@ -31,10 +31,16 @@ FPS_CAP = 60  # Maximum detection FPS (frames per second)
 print(f"Loading YOLO model ({MODEL_PATH})...")
 model = YOLO(MODEL_PATH)
 
+# Default class names for arras.io objects
+DEFAULT_CLASSES = ["bullet", "egg", "hexagon", "pentagon", "player", "square", "triangle", "wall"]
+
 class_names = []
 if os.path.exists(CLASSES_FILE):
     with open(CLASSES_FILE) as f:
         class_names = [line.strip() for line in f if line.strip()]
+else:
+    # Use default classes if file doesn't exist
+    class_names = DEFAULT_CLASSES
 print(f"Classes: {class_names}")
 
 # --------------- Serve HTML + detection API ---------------
@@ -474,27 +480,14 @@ if __name__ == "__main__":
     print(f"  Model: {MODEL_PATH}  |  Classes: {class_names}")
     print(f"  Press Ctrl+C to stop\n")
 
-    # Auto-open in Chrome after a short delay (cross-platform)
-    def open_in_chrome():
+    # Auto-open in default browser after a short delay
+    def open_browser():
         try:
-            # Try common Chrome browser names (works on Windows, macOS, Linux)
-            chrome = webbrowser.get('chrome') if hasattr(webbrowser, 'get') else None
-            if chrome:
-                chrome.open(url)
-            else:
-                # Fallback: try by name
-                for name in ['google-chrome', 'chrome', 'chromium']:
-                    try:
-                        webbrowser.get(name).open(url)
-                        return
-                    except:
-                        continue
-                # If Chrome not found, use default browser
-                webbrowser.open(url)
-        except:
             webbrowser.open(url)
+        except:
+            pass  # Silently fail if browser can't open
     
-    threading.Timer(1.0, open_in_chrome).start()
+    threading.Timer(1.0, open_browser).start()
 
     try:
         server.serve_forever()
